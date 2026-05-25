@@ -12,6 +12,7 @@ usando o mapeamento de colaboradores do config.py.
 import os
 import sys
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
@@ -62,55 +63,70 @@ def carregar_mapeamento_excel():
         df = dfs[0]
         mapa = {}
 
+        # Encontrar coluna de telefone (pode ser "Telefone" ou "Telefone Bitrix24")
+        telefone_col = None
+        for col in df.columns:
+            if 'telefone' in col.lower():
+                telefone_col = col
+                break
+
         for idx, row in df.iterrows():
             if pd.isna(row.get('Colaborador')):
                 continue
 
             colaborador = str(row['Colaborador']).strip()
-            telefone = str(row.get('Telefone', 'N/A')).strip() if 'Telefone' in df.columns else 'N/A'
+            telefone = 'N/A'
+            if telefone_col and telefone_col in row:
+                telefone = str(row[telefone_col]).strip()
+
             data_str = str(row.get('Data da chamada', '')).strip() if 'Data da chamada' in df.columns else ''
+            area = mapear_colaborador_para_area(colaborador)
 
             mapa[colaborador] = {
                 'telefone': telefone,
                 'data': data_str,
-                'area': mapear_colaborador_para_area(colaborador)
+                'area': area
             }
 
         return mapa
     except Exception as e:
         print(f"    Erro ao ler Excel: {e}")
+        import traceback
+        traceback.print_exc()
         return {}
 
 
 def encontrar_audios_por_area():
-    """Encontra todos os MP3s em dados/ e agrupa por área."""
+    """Encontra todos os MP3s em dados/ e agrupa por área usando Excel como referência."""
     audios_por_area = {area_key: [] for area_key in AREAS.keys()}
 
     if not os.path.exists(DADOS_DIR):
-        return audios_por_area
+        return audios_por_area, {}
 
     mapeamento = carregar_mapeamento_excel()
     audios = sorted(Path(DADOS_DIR).glob("*.mp3"))
 
+    # Criar mapa telefone → área a partir do Excel
+    telefone_para_area = {}
+    for colaborador, info in mapeamento.items():
+        if info['telefone'] != 'N/A' and info['area']:
+            # Normalizar telefone (remover caracteres especiais)
+            tel = info['telefone'].replace('+', '').replace(' ', '').strip()
+            telefone_para_area[tel] = info['area']
+
     for audio_path in audios:
-        # Tentar extrair colaborador do nome do arquivo ou do mapeamento
         nome_arquivo = audio_path.name
         area_encontrada = None
 
-        # Estratégia 1: Procurar no mapeamento Excel
-        for colaborador, info in mapeamento.items():
-            if info['area'] and colaborador.lower() in nome_arquivo.lower():
-                area_encontrada = info['area']
-                break
-
-        # Estratégia 2: Matchear com nomes de agentes direto no arquivo
-        if not area_encontrada:
-            for area_key, cfg in AREAS.items():
-                for agente in cfg["agentes"]:
-                    if agente.lower() in nome_arquivo.lower():
-                        area_encontrada = area_key
-                        break
-                if area_encontrada:
+        # Estratégia 1: Extrair telefone do nome do arquivo (está entre data e .mp3)
+        # Exemplo: "2026-05-11 15-37-11 +5511953289150.mp3"
+        match = re.search(r'[\+]?(\d{10,15})', nome_arquivo)
+        if match:
+            telefone_extraido = match.group(1)
+            # Procurar no mapeamento
+            for tel, area in telefone_para_area.items():
+                if telefone_extraido in tel or tel in telefone_extraido:
+                    area_encontrada = area
                     break
 
         # Se encontrou área, adicionar à lista

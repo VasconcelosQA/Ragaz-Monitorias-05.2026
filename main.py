@@ -1,23 +1,12 @@
 """
-Orquestrador principal do sistema de monitorias Ragaz.
+Orquestrador principal do sistema de monitorias Ragaz - VERSÃO FLEXÍVEL.
 
 Uso:
-    python main.py                    → processa a pasta de hoje
-    python main.py 2026-05-25         → processa data específica
-    python main.py 2026-05-25 --estimar  → só mostra projeção de custo, não processa
+    python main.py                    → processa todos os MP3s em dados/
+    python main.py --estimar         → só mostra projeção de custo, não processa
 
-Estrutura esperada em dados/:
-    dados/
-    └── 2026-05-25/
-        ├── sucesso_corretor/
-        │   ├── audios/          ← coloque os MP3 aqui
-        │   └── relatorio.xlsx   ← export do Bitrix (opcional, enriquece contexto)
-        ├── atendimento/
-        │   ├── audios/
-        │   └── relatorio.xlsx
-        └── comercial_cadastro/
-            ├── audios/
-            └── relatorio.xlsx
+Os audios estão em dados/ (raiz) e serão agrupados por área automaticamente
+usando o mapeamento de colaboradores do config.py.
 """
 
 import os
@@ -41,30 +30,107 @@ from reporter import (
 )
 
 
+# ── Mapear colaborador → área ─────────────────────────────────────────────────
+
+def mapear_colaborador_para_area(colaborador):
+    """Identifica a área de um colaborador usando o config.py."""
+    if not colaborador:
+        return None
+
+    colaborador_lower = colaborador.lower().strip()
+
+    for area_key, cfg in AREAS.items():
+        for agente in cfg["agentes"]:
+            if agente.lower() in colaborador_lower or colaborador_lower in agente.lower():
+                return area_key
+    return None
+
+
+def carregar_mapeamento_excel():
+    """Lê o Excel do Bitrix e retorna dict com colaborador → dados."""
+    excel_path = os.path.join(DADOS_DIR, "calls_detail_20260525_378585bd_6a1495af09ba6.xls")
+
+    if not os.path.exists(excel_path):
+        print(f"    Aviso: Excel não encontrado ({excel_path})")
+        return {}
+
+    try:
+        dfs = pd.read_html(excel_path)
+        if not dfs:
+            return {}
+
+        df = dfs[0]
+        mapa = {}
+
+        for idx, row in df.iterrows():
+            if pd.isna(row.get('Colaborador')):
+                continue
+
+            colaborador = str(row['Colaborador']).strip()
+            telefone = str(row.get('Telefone', 'N/A')).strip() if 'Telefone' in df.columns else 'N/A'
+            data_str = str(row.get('Data da chamada', '')).strip() if 'Data da chamada' in df.columns else ''
+
+            mapa[colaborador] = {
+                'telefone': telefone,
+                'data': data_str,
+                'area': mapear_colaborador_para_area(colaborador)
+            }
+
+        return mapa
+    except Exception as e:
+        print(f"    Erro ao ler Excel: {e}")
+        return {}
+
+
+def encontrar_audios_por_area():
+    """Encontra todos os MP3s em dados/ e agrupa por área."""
+    audios_por_area = {area_key: [] for area_key in AREAS.keys()}
+
+    if not os.path.exists(DADOS_DIR):
+        return audios_por_area
+
+    mapeamento = carregar_mapeamento_excel()
+    audios = sorted(Path(DADOS_DIR).glob("*.mp3"))
+
+    for audio_path in audios:
+        # Tentar extrair colaborador do nome do arquivo ou do mapeamento
+        nome_arquivo = audio_path.name
+        area_encontrada = None
+
+        # Estratégia 1: Procurar no mapeamento Excel
+        for colaborador, info in mapeamento.items():
+            if info['area'] and colaborador.lower() in nome_arquivo.lower():
+                area_encontrada = info['area']
+                break
+
+        # Estratégia 2: Matchear com nomes de agentes direto no arquivo
+        if not area_encontrada:
+            for area_key, cfg in AREAS.items():
+                for agente in cfg["agentes"]:
+                    if agente.lower() in nome_arquivo.lower():
+                        area_encontrada = area_key
+                        break
+                if area_encontrada:
+                    break
+
+        # Se encontrou área, adicionar à lista
+        if area_encontrada:
+            audios_por_area[area_encontrada].append(audio_path)
+
+    return audios_por_area, mapeamento
+
+
 # ── Processar uma área ─────────────────────────────────────────────────────────
 
-def processar_area(area_key, pasta_dia):
-    cfg          = AREAS[area_key]
-    pasta_area   = os.path.join(pasta_dia, cfg["pasta"])
-    pasta_audios = os.path.join(pasta_area, "audios")
+def processar_area(area_key, audios_area, mapeamento):
+    cfg = AREAS[area_key]
 
-    if not os.path.exists(pasta_audios):
-        print(f"    Pasta nao encontrada: {pasta_audios} — pulando.")
+    if not audios_area:
+        print(f"    Nenhum MP3 encontrado para esta área — pulando.")
         return [], 0.0
 
-    audios = sorted(Path(pasta_audios).glob("*.mp3"))
-    if not audios:
-        print(f"    Nenhum MP3 encontrado em {pasta_audios} — pulando.")
-        return [], 0.0
-
+    audios = sorted(audios_area)
     print(f"    {len(audios)} audio(s) encontrado(s)")
-
-    # Carregar Excel se existir
-    df = None
-    excel_path = os.path.join(pasta_area, "relatorio.xlsx")
-    if os.path.exists(excel_path):
-        df = pd.read_excel(excel_path)
-        print(f"    Excel carregado: {len(df)} linhas")
 
     resultados          = []
     total_tokens_input  = 0
@@ -79,9 +145,15 @@ def processar_area(area_key, pasta_dia):
             print(f"IGNORADO ({duracao:.0f}s < mínimo)")
             continue
 
-        # Agente e contexto
-        agente  = _detectar_agente(audio_path.name, cfg["agentes"])
-        contexto = _montar_contexto(agente, duracao, df, audio_path.name)
+        # Detectar agente pelo nome do arquivo
+        agente = _detectar_agente(audio_path.name, cfg["agentes"])
+
+        # Tentar enriquecer com informações do Excel
+        contexto = {"gestor": agente, "telefone": "N/A", "tipo_pendencia": "N/A", "duracao": round(duracao)}
+        for colaborador, info in mapeamento.items():
+            if colaborador.lower() in audio_path.name.lower() and info['area'] == area_key:
+                contexto["telefone"] = info.get('telefone', 'N/A')
+                break
 
         # Transcrição
         texto, erro = transcrever_audio(str(audio_path))
@@ -188,39 +260,32 @@ def _montar_contexto(agente, duracao, df, nome_arquivo):
 
 def main():
     print("=" * 70)
-    print("  SISTEMA DE MONITORIAS RAGAZ")
+    print("  SISTEMA DE MONITORIAS RAGAZ - VERSÃO FLEXÍVEL")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
-    # Argumentos
-    data     = sys.argv[1] if len(sys.argv) > 1 else datetime.now().strftime("%Y-%m-%d")
     so_estimar = "--estimar" in sys.argv
-
-    pasta_dia    = os.path.join(DADOS_DIR, data)
-    pasta_output = os.path.join(OUTPUT_DIR, data)
+    pasta_output = os.path.join(OUTPUT_DIR, datetime.now().strftime("%Y-%m-%d"))
     os.makedirs(pasta_output, exist_ok=True)
 
-    print(f"\n  Data processada : {data}")
-    print(f"  Pasta de dados  : {pasta_dia}")
+    print(f"\n  Pasta de dados  : {DADOS_DIR}")
     print(f"  Saida           : {pasta_output}")
 
-    if not os.path.exists(pasta_dia):
-        print(f"\n  ERRO: Pasta {pasta_dia} nao encontrada.")
-        print("  Crie a estrutura abaixo e coloque os MP3s:")
-        for cfg in AREAS.values():
-            print(f"    dados/{data}/{cfg['pasta']}/audios/")
-        return
+    # Encontrar áudios agrupados por área
+    print(f"\n  Carregando mapeamento de colaboradores...")
+    audios_por_area, mapeamento = encontrar_audios_por_area()
 
-    # Contar áudios para estimativa
-    total_audios = 0
-    for cfg in AREAS.values():
-        p = Path(os.path.join(pasta_dia, cfg["pasta"], "audios"))
-        if p.exists():
-            total_audios += len(list(p.glob("*.mp3")))
+    # Contar total
+    total_audios = sum(len(v) for v in audios_por_area.values())
 
     if total_audios == 0:
-        print("\n  Nenhum MP3 encontrado em nenhuma área.")
+        print("\n  ERRO: Nenhum MP3 encontrado em dados/")
         return
+
+    print(f"  Total de audios encontrados: {total_audios}")
+    for area_key, audios in audios_por_area.items():
+        if audios:
+            print(f"    {AREAS[area_key]['nome']}: {len(audios)} arquivo(s)")
 
     # Estimativa de custo
     est = estimar_custo_analise(total_audios)
@@ -239,21 +304,25 @@ def main():
     relatorios  = {}
     custo_total = 0.0
     resumo_hist = {}
+    data_processamento = datetime.now().strftime("%Y-%m-%d")
 
     for area_key, cfg in AREAS.items():
+        if not audios_por_area[area_key]:
+            continue
+
         print(f"\n[{cfg['nome'].upper()}]  supervisor: {cfg['supervisor']}")
-        resultados, custo = processar_area(area_key, pasta_dia)
+        resultados, custo = processar_area(area_key, audios_por_area[area_key], mapeamento)
         custo_total += custo
 
         if not resultados:
             continue
 
-        periodo  = data[:7]   # YYYY-MM
+        periodo = data_processamento[:7]
         relatorio = gerar_relatorio_area(area_key, resultados, periodo, custo)
         relatorios[area_key] = relatorio
 
         # Salvar JSON da área
-        nome_json = f"relatorio_{cfg['pasta']}_{data}.json"
+        nome_json = f"relatorio_{cfg['pasta']}_{data_processamento}.json"
         with open(os.path.join(pasta_output, nome_json), "w", encoding="utf-8") as f:
             json.dump(relatorio, f, ensure_ascii=False, indent=2)
 
@@ -272,15 +341,15 @@ def main():
 
     # Consolidado geral
     if relatorios:
-        consolidado = gerar_consolidado_geral(relatorios, data[:7], custo_total)
-        nome_cons   = f"consolidado_{data}.json"
+        consolidado = gerar_consolidado_geral(relatorios, periodo, custo_total)
+        nome_cons = f"consolidado_{data_processamento}.json"
         with open(os.path.join(pasta_output, nome_cons), "w", encoding="utf-8") as f:
             json.dump(consolidado, f, ensure_ascii=False, indent=2)
 
         # Histórico
         registrar_historico(
             os.path.join(OUTPUT_DIR, "historico.json"),
-            data, resumo_hist, custo_total
+            data_processamento, resumo_hist, custo_total
         )
 
         print(f"\n{'='*70}")

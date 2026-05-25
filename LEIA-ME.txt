@@ -1,0 +1,80 @@
+﻿=====================================================================
+  SISTEMA DE MONITORIAS RAGAZ
+  VersÃ£o 1.0 â€” Maio 2026
+=====================================================================
+
+REQUISITO: ffmpeg instalado e no PATH
+  Baixar em: https://ffmpeg.org/download.html
+
+INSTALAÃ‡ÃƒO (executar uma vez, como administrador):
+  pip install -r requirements.txt
+
+CONFIGURAÃ‡ÃƒO:
+  1. Copiar .env.example para .env
+  2. Preencher ANTHROPIC_API_KEY no .env
+
+---------------------------------------------------------------------
+ESTRUTURA DE DADOS (criar antes de cada rodada)
+---------------------------------------------------------------------
+
+dados\
+â””â”€â”€ 2026-05-25\                    â† data da rodada
+    â”œâ”€â”€ sucesso_corretor\
+    â”‚   â”œâ”€â”€ audios\                â† coloque os MP3 aqui
+    â”‚   â””â”€â”€ relatorio.xlsx         â† export Bitrix (opcional)
+    â”œâ”€â”€ atendimento\
+    â”‚   â”œâ”€â”€ audios\
+    â”‚   â””â”€â”€ relatorio.xlsx
+    â””â”€â”€ comercial_cadastro\
+        â”œâ”€â”€ audios\
+        â””â”€â”€ relatorio.xlsx
+
+NomeaÃ§Ã£o dos MP3s: inclua o nome do agente no arquivo.
+  Ex: ariel_001.mp3 / lhaine_20260525.mp3 / nathalia_cliente_xyz.mp3
+
+---------------------------------------------------------------------
+COMO RODAR
+---------------------------------------------------------------------
+
+# Ver estimativa de custo sem processar:
+python main.py 2026-05-25 --estimar
+
+# Processar rodada completa:
+python main.py 2026-05-25
+
+# Processar a data de hoje:
+python main.py
+
+---------------------------------------------------------------------
+SAÃDAS (pasta output\2026-05-25\)
+---------------------------------------------------------------------
+
+relatorio_sucesso_corretor_2026-05-25.json   â† Lovable pÃ¡gina 2
+relatorio_atendimento_2026-05-25.json        â† Lovable pÃ¡gina 3
+relatorio_comercial_cadastro_2026-05-25.json â† Lovable pÃ¡gina 4
+consolidado_2026-05-25.json                  â† Lovable pÃ¡gina 1
+
+output\historico.json                        â† histÃ³rico de todas as rodadas
+
+---------------------------------------------------------------------
+ÃREAS E AGENTES
+---------------------------------------------------------------------
+
+SUCESSO DO CORRETOR  |  Supervisor: Diego
+  Ariel, Aline, TaynnÃ£, Ligiane, Eduardo, Tatiana
+
+ATENDIMENTO  |  Supervisora: Danielle Moura
+  Deuzeni, Lhaine, Talita, JÃ©ssica
+
+COMERCIAL CADASTRO  |  Supervisor: Rodrigo
+  NatÃ¡lia, Ariely, Ana LÃºcia
+
+---------------------------------------------------------------------
+CUSTO ESTIMADO (Haiku, Google SR grÃ¡tis)
+---------------------------------------------------------------------
+
+100 ligaÃ§Ãµes de 3 min:  ~$0.09
+500 ligaÃ§Ãµes de 3 min:  ~$0.46
+3394 ligaÃ§Ãµes de 3 min: ~$3.13
+
+Usar --estimar antes de rodar para ver a projeÃ§Ã£o exata do dia.

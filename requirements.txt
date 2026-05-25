@@ -1,0 +1,7 @@
+anthropic
+pandas
+openpyxl
+SpeechRecognition
+mutagen
+librosa
+python-dotenv

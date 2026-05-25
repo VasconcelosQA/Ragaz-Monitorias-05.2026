@@ -47,8 +47,8 @@ def mapear_colaborador_para_area(colaborador):
     return None
 
 
-def carregar_mapeamento_excel():
-    """Lê o Excel do Bitrix e retorna dict com colaborador → dados."""
+def carregar_mapeamento_telefone_area():
+    """Lê o Excel e cria mapa direto: telefone normalizado → área."""
     excel_path = os.path.join(DADOS_DIR, "calls_detail_20260525_378585bd_6a1495af09ba6.xls")
 
     if not os.path.exists(excel_path):
@@ -61,34 +61,36 @@ def carregar_mapeamento_excel():
             return {}
 
         df = dfs[0]
-        mapa = {}
-
-        # Encontrar coluna de telefone (pode ser "Telefone" ou "Telefone Bitrix24")
-        telefone_col = None
-        for col in df.columns:
-            if 'telefone' in col.lower():
-                telefone_col = col
-                break
+        telefone_para_area = {}
 
         for idx, row in df.iterrows():
+            # Pular linhas sem colaborador
             if pd.isna(row.get('Colaborador')):
                 continue
 
             colaborador = str(row['Colaborador']).strip()
-            telefone = 'N/A'
-            if telefone_col and telefone_col in row:
-                telefone = str(row[telefone_col]).strip()
 
-            data_str = str(row.get('Data da chamada', '')).strip() if 'Data da chamada' in df.columns else ''
+            # Mapear colaborador para área
             area = mapear_colaborador_para_area(colaborador)
+            if not area:
+                continue
 
-            mapa[colaborador] = {
-                'telefone': telefone,
-                'data': data_str,
-                'area': area
-            }
+            # Extrair telefone da coluna "Telefone" (telefone da chamada, não Bitrix)
+            telefone_col = 'Telefone'
+            if telefone_col not in df.columns:
+                continue
 
-        return mapa
+            telefone_str = str(row[telefone_col]).strip()
+            if not telefone_str or telefone_str == 'N/A':
+                continue
+
+            # Normalizar telefone
+            tel_norm = normalizar_telefone(telefone_str)
+            if tel_norm:
+                telefone_para_area[tel_norm] = area
+
+        return telefone_para_area
+
     except Exception as e:
         print(f"    Erro ao ler Excel: {e}")
         import traceback
@@ -110,18 +112,12 @@ def encontrar_audios_por_area():
     audios_por_area = {area_key: [] for area_key in AREAS.keys()}
 
     if not os.path.exists(DADOS_DIR):
-        return audios_por_area, {}
+        return audios_por_area
 
-    mapeamento = carregar_mapeamento_excel()
+    # Carregar mapa telefone → área
+    telefone_para_area = carregar_mapeamento_telefone_area()
+
     audios = sorted(Path(DADOS_DIR).glob("*.mp3"))
-
-    # Criar mapa telefone → área a partir do Excel (normalizar todos)
-    telefone_para_area = {}
-    for colaborador, info in mapeamento.items():
-        if info['telefone'] != 'N/A' and info['area']:
-            tel_norm = normalizar_telefone(info['telefone'])
-            if tel_norm:
-                telefone_para_area[tel_norm] = info['area']
 
     # Debug
     print(f"    Mapeamento: {len(telefone_para_area)} telefones mapeados para áreas")
@@ -147,12 +143,12 @@ def encontrar_audios_por_area():
         if area_encontrada:
             audios_por_area[area_encontrada].append(audio_path)
 
-    return audios_por_area, mapeamento
+    return audios_por_area
 
 
 # ── Processar uma área ─────────────────────────────────────────────────────────
 
-def processar_area(area_key, audios_area, mapeamento):
+def processar_area(area_key, audios_area):
     cfg = AREAS[area_key]
 
     if not audios_area:
@@ -178,12 +174,8 @@ def processar_area(area_key, audios_area, mapeamento):
         # Detectar agente pelo nome do arquivo
         agente = _detectar_agente(audio_path.name, cfg["agentes"])
 
-        # Tentar enriquecer com informações do Excel
+        # Contexto básico
         contexto = {"gestor": agente, "telefone": "N/A", "tipo_pendencia": "N/A", "duracao": round(duracao)}
-        for colaborador, info in mapeamento.items():
-            if colaborador.lower() in audio_path.name.lower() and info['area'] == area_key:
-                contexto["telefone"] = info.get('telefone', 'N/A')
-                break
 
         # Transcrição
         texto, erro = transcrever_audio(str(audio_path))
@@ -303,7 +295,7 @@ def main():
 
     # Encontrar áudios agrupados por área
     print(f"\n  Carregando mapeamento de colaboradores...")
-    audios_por_area, mapeamento = encontrar_audios_por_area()
+    audios_por_area = encontrar_audios_por_area()
 
     # Contar total
     total_audios = sum(len(v) for v in audios_por_area.values())
@@ -341,7 +333,7 @@ def main():
             continue
 
         print(f"\n[{cfg['nome'].upper()}]  supervisor: {cfg['supervisor']}")
-        resultados, custo = processar_area(area_key, audios_por_area[area_key], mapeamento)
+        resultados, custo = processar_area(area_key, audios_por_area[area_key])
         custo_total += custo
 
         if not resultados:

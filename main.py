@@ -96,6 +96,15 @@ def carregar_mapeamento_excel():
         return {}
 
 
+def normalizar_telefone(tel):
+    """Normaliza telefone removendo caracteres especiais."""
+    if not tel or tel == 'N/A':
+        return None
+    tel_str = str(tel).replace('+', '').replace(' ', '').replace('-', '').replace('(', '').replace(')', '').strip()
+    # Remover leading zeros se houver
+    return tel_str.lstrip('0') if tel_str else None
+
+
 def encontrar_audios_por_area():
     """Encontra todos os MP3s em dados/ e agrupa por área usando Excel como referência."""
     audios_por_area = {area_key: [] for area_key in AREAS.keys()}
@@ -106,28 +115,33 @@ def encontrar_audios_por_area():
     mapeamento = carregar_mapeamento_excel()
     audios = sorted(Path(DADOS_DIR).glob("*.mp3"))
 
-    # Criar mapa telefone → área a partir do Excel
+    # Criar mapa telefone → área a partir do Excel (normalizar todos)
     telefone_para_area = {}
     for colaborador, info in mapeamento.items():
         if info['telefone'] != 'N/A' and info['area']:
-            # Normalizar telefone (remover caracteres especiais)
-            tel = info['telefone'].replace('+', '').replace(' ', '').strip()
-            telefone_para_area[tel] = info['area']
+            tel_norm = normalizar_telefone(info['telefone'])
+            if tel_norm:
+                telefone_para_area[tel_norm] = info['area']
+
+    # Debug
+    print(f"    Mapeamento: {len(telefone_para_area)} telefones mapeados para áreas")
+    if telefone_para_area:
+        print(f"    Exemplos: {list(telefone_para_area.items())[:3]}")
 
     for audio_path in audios:
         nome_arquivo = audio_path.name
         area_encontrada = None
 
-        # Estratégia 1: Extrair telefone do nome do arquivo (está entre data e .mp3)
+        # Extrair telefone do nome do arquivo
         # Exemplo: "2026-05-11 15-37-11 +5511953289150.mp3"
         match = re.search(r'[\+]?(\d{10,15})', nome_arquivo)
         if match:
             telefone_extraido = match.group(1)
+            telefone_norm = normalizar_telefone(telefone_extraido)
+
             # Procurar no mapeamento
-            for tel, area in telefone_para_area.items():
-                if telefone_extraido in tel or tel in telefone_extraido:
-                    area_encontrada = area
-                    break
+            if telefone_norm in telefone_para_area:
+                area_encontrada = telefone_para_area[telefone_norm]
 
         # Se encontrou área, adicionar à lista
         if area_encontrada:

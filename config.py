@@ -36,9 +36,8 @@ AREAS = {
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 # Haiku 4.5: mais barato e rápido — use para rodadas grandes
-# Sonnet: melhor qualidade — use para amostras menores ou revisão
-CLAUDE_MODEL         = "claude-haiku-4.5-20251001"
-CLAUDE_MODEL_PREMIUM = "claude-sonnet-4-20250514"
+CLAUDE_MODEL         = "claude-haiku-4-5-20251001"
+CLAUDE_MODEL_PREMIUM = "claude-haiku-4-5-20251001"  # Mesmo modelo (sem fallback premium)
 
 MAX_TOKENS_ANALISE = 700
 

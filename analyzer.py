@@ -1,20 +1,26 @@
 """
-Análise de transcrições via Claude API.
+Análise de transcrições via Claude API com retry automático e fallback.
 Roteia para o prompt correto de cada área e rastreia custo por token.
 """
 
 import re
 import json
+import time
 from anthropic import Anthropic
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, MAX_TOKENS_ANALISE
 from prompts import get_prompt_by_area
 
 client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
+# Só Haiku (mais barato) - sem fallback para Sonnet
+MODELOS = [CLAUDE_MODEL]
+MAX_RETRIES = 3
+BACKOFF_INICIAL = 2  # segundo
+
 
 def analisar_ligacao(transcricao, contexto, area):
     """
-    Analisa uma transcrição com o prompt da área.
+    Analisa uma transcrição com retry automático e fallback de modelo.
 
     Retorna dict:
     {
@@ -30,45 +36,57 @@ def analisar_ligacao(transcricao, contexto, area):
 
     prompt = get_prompt_by_area(area, contexto, transcricao)
 
-    try:
-        response = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=MAX_TOKENS_ANALISE,
-            messages=[{"role": "user", "content": prompt}]
-        )
+    # Tentar cada modelo com retries
+    for modelo_idx, modelo in enumerate(MODELOS):
+        for tentativa in range(MAX_RETRIES):
+            try:
+                response = client.messages.create(
+                    model=modelo,
+                    max_tokens=MAX_TOKENS_ANALISE,
+                    messages=[{"role": "user", "content": prompt}]
+                )
 
-        texto      = response.content[0].text
-        uso        = response.usage
+                texto = response.content[0].text
+                uso = response.usage
 
-        # Extrair JSON da resposta
-        json_match = re.search(r'\{.*\}', texto, re.DOTALL)
-        if not json_match:
-            return {
-                "sucesso": False,
-                "erro": "Resposta sem JSON válido",
-                "raw": texto,
-                "tokens_input": uso.input_tokens,
-                "tokens_output": uso.output_tokens
-            }
+                # Extrair JSON da resposta
+                json_match = re.search(r'\{.*\}', texto, re.DOTALL)
+                if not json_match:
+                    continue  # Tenta próxima tentativa
 
-        analise = json.loads(json_match.group())
+                analise = json.loads(json_match.group())
 
-        # Garantir nota_final no Atendimento (soma os pesos de CUMPRIU)
-        if area == "ATENDIMENTO" and analise.get("nota_final", 0) == 0:
-            analise["nota_final"] = _calcular_nota_atendimento(analise)
+                # Garantir nota_final no Atendimento
+                if area == "ATENDIMENTO" and analise.get("nota_final", 0) == 0:
+                    analise["nota_final"] = _calcular_nota_atendimento(analise)
 
-        return {
-            "sucesso"       : True,
-            "analise"       : analise,
-            "tokens_input"  : uso.input_tokens,
-            "tokens_output" : uso.output_tokens,
-            "erro"          : None
-        }
+                return {
+                    "sucesso"       : True,
+                    "analise"       : analise,
+                    "tokens_input"  : uso.input_tokens,
+                    "tokens_output" : uso.output_tokens,
+                    "erro"          : None
+                }
 
-    except json.JSONDecodeError as e:
-        return {"sucesso": False, "erro": f"JSON inválido: {e}", "tokens_input": 0, "tokens_output": 0}
-    except Exception as e:
-        return {"sucesso": False, "erro": str(e), "tokens_input": 0, "tokens_output": 0}
+            except json.JSONDecodeError:
+                continue  # Tenta próxima tentativa
+            except Exception as e:
+                erro_str = str(e)
+                # Se é erro 404 ou rate limit, faz backoff
+                if "404" in erro_str or "rate_limit" in erro_str:
+                    backoff = BACKOFF_INICIAL * (2 ** tentativa)
+                    time.sleep(backoff)
+                    continue
+                # Se falhou com este modelo, tenta o próximo
+                break
+
+    # Nenhum modelo funcionou
+    return {
+        "sucesso": False,
+        "erro": "Todos os modelos falharam após retries",
+        "tokens_input": 0,
+        "tokens_output": 0
+    }
 
 
 def _calcular_nota_atendimento(analise):

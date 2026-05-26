@@ -1,11 +1,9 @@
 """
 Transcrição de áudios MP3.
 
-Método atual: Google Speech Recognition (gratuito, sem chave de API).
-Limitação: menos preciso em áudios com ruído, limite de taxa de requisições.
-
-Alternativa recomendada se o volume travar: OpenAI Whisper local (grátis, roda offline).
-Para ativar Whisper: pip install openai-whisper e trocar a função transcrever_audio.
+Método: OpenAI Whisper Local (principal) + Google SR (fallback).
+- Whisper: grátis, offline, mais rápido
+- Google: grátis, online, fallback se Whisper falhar
 """
 
 import os
@@ -14,6 +12,12 @@ import speech_recognition as sr
 from mutagen.mp3 import MP3
 from config import DURACAO_MINIMA_SEGUNDOS, IDIOMA_TRANSCRICAO
 from config import PRECO_HAIKU_INPUT, PRECO_HAIKU_OUTPUT, PRECO_SONNET_INPUT, PRECO_SONNET_OUTPUT
+
+try:
+    import whisper
+    WHISPER_DISPONIVEL = True
+except ImportError:
+    WHISPER_DISPONIVEL = False
 
 
 def obter_duracao_mp3(caminho):
@@ -33,27 +37,47 @@ def obter_duracao_mp3(caminho):
 
 def transcrever_audio(caminho_mp3):
     """
-    Transcreve MP3 usando Google Speech Recognition.
-    Retorna (texto, erro).  erro=None se OK.
+    Transcreve MP3 com fallback: Whisper Local → Google SR.
+    Retorna (texto, erro). erro=None se OK.
     """
-    recognizer = sr.Recognizer()
-    wav_temp = caminho_mp3.replace(".mp3", "_tmp.wav")
+    # Estratégia 1: Tentar Whisper Local (mais rápido, offline)
+    if WHISPER_DISPONIVEL:
+        try:
+            model = whisper.load_model("base", in_memory=True)
+            result = model.transcribe(
+                caminho_mp3,
+                language="pt",
+                verbose=False
+            )
+            texto = result.get("text", "").strip()
 
+            if texto:
+                return texto, None
+        except Exception as e:
+            pass  # Fallback para Google
+
+    # Estratégia 2: Fallback para Google Speech Recognition
     try:
-        # Converter MP3 → WAV mono 16kHz (formato aceito pelo Google SR)
+        recognizer = sr.Recognizer()
+        wav_temp = caminho_mp3.replace(".mp3", "_tmp.wav")
+
+        # Converter MP3 → WAV
         result = subprocess.run(
             ["ffmpeg", "-i", caminho_mp3,
              "-ar", "16000", "-ac", "1",
              wav_temp, "-y", "-loglevel", "quiet"],
-            capture_output=True
+            capture_output=True,
+            timeout=30
         )
         if result.returncode != 0:
-            return "", "ffmpeg falhou — verifique se está instalado"
+            return "", "ffmpeg falhou"
 
         with sr.AudioFile(wav_temp) as source:
             audio = recognizer.record(source)
 
         texto = recognizer.recognize_google(audio, language=IDIOMA_TRANSCRICAO)
+        if os.path.exists(wav_temp):
+            os.remove(wav_temp)
         return texto, None
 
     except sr.UnknownValueError:
@@ -61,9 +85,9 @@ def transcrever_audio(caminho_mp3):
     except sr.RequestError as e:
         return "", f"Erro Google API: {e}"
     except Exception as e:
-        return "", f"Erro inesperado: {e}"
+        return "", f"Erro transcrição: {e}"
     finally:
-        if os.path.exists(wav_temp):
+        if 'wav_temp' in locals() and os.path.exists(wav_temp):
             os.remove(wav_temp)
 
 

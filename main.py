@@ -194,13 +194,17 @@ def processar_area(area_key, audios_area, telefone_para_gestor):
                 with open(arquivo_transcricao, 'w', encoding='utf-8') as f:
                     f.write(texto)
 
+        # Extrair data real do nome do arquivo (ex: "2026-05-11 15-56-52 +55...")
+        data_match = re.search(r'(\d{4}-\d{2}-\d{2})', audio_path.name)
+        data_ligacao = data_match.group(1) if data_match else datetime.now().strftime("%Y-%m-%d")
+
         if erro or not texto.strip():
             print(f"FALHA TRANSCRIÇÃO: {erro or 'vazio'}")
             resultados.append({
                 "ligacao_id": audio_path.stem,
                 "agente"    : agente,
                 "duracao"   : round(duracao),
-                "data"      : datetime.now().strftime("%Y-%m-%d"),
+                "data"      : data_ligacao,
                 "arquivo"   : audio_path.name,
                 "sucesso"   : False,
                 "erro"      : erro or "transcrição vazia"
@@ -218,7 +222,7 @@ def processar_area(area_key, audios_area, telefone_para_gestor):
             "ligacao_id": audio_path.stem,
             "agente"    : agente,
             "duracao"   : round(duracao),
-            "data"      : datetime.now().strftime("%Y-%m-%d"),
+            "data"      : data_ligacao,
             "arquivo"   : audio_path.name
         })
 
